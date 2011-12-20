@@ -3,21 +3,22 @@ HTTP=cowboy
 
 .PHONY: all deps test test-prep clean distclean
 
-all: deps deps/$(HTTP)
-	make -C deps/$(HTTP)
+all:
+# deps deps/$(HTTP)
+#	make -C deps/$(HTTP)
 	./rebar compile
 
 deps:
 	-./rebar get-deps
 # git:// URLs don't work behind some proxies. Grr.
-	sed -i='' 's|git:|https:|g' deps/cowboy/rebar.config
+#	sed -i='' 's|git:|https:|g' deps/cowboy/rebar.config
 	./rebar get-deps
 
 test: test-prep all
 	erl -pa ebin deps/*/ebin \
-		-sockjs json_impl $(JSON) \
-		-sockjs http_impl $(HTTP) \
-		-run sockjs_test
+		-s reloader \
+		-run sockjs_test \
+		-boot start_sasl		
 
 test-prep: deps/sockjs-client priv/www
 	cd deps/sockjs-client && npm install

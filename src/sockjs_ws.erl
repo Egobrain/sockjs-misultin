@@ -4,20 +4,11 @@
 
 -export([send/2, close/3]).
 
-%% TODO this has little in common with the other transports
-%% Where should framing happen? (Do we care?)
-
-send(Data, {?MODULE, Ws, cowboy}) ->
-    Ws ! {send, ["a[", sockjs_util:encode(Data), "]"]};
-
-send(Data, {?MODULE, Ws, misultin}) ->
+send(Data, {?MODULE, Ws}) ->
+    io:format("LOG: send ~p",[Data]),
     Ws:send(["a[", sockjs_util:encode(Data), "]"]).
 
-close(Code, Reason, {?MODULE, Ws, cowboy}) ->
-    Ws ! {send, ["c", sockjs_util:encode([Code, list_to_binary(Reason)])]},
-    Ws ! shutdown;
-
-close(Code, Reason, {?MODULE, Ws, misultin}) ->
+close(Code, Reason, {?MODULE, Ws}) ->
     Ws:send(["c", sockjs_util:encode([Code, list_to_binary(Reason)])]),
     exit(normal). %% TODO ?
 

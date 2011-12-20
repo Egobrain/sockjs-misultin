@@ -41,32 +41,32 @@
   </script>").
 
 handle_req(Req, Path, Dispatcher) ->
-    {Method, Req1} = sockjs_http:method(Req),
+    Method = sockjs_http:method(Req),
     case dispatch(Method, Path, Dispatcher) of
         {Receive, Server, SessionId, {SendRecv, Action, Filters}} ->
             %%io:format("~s ~s~n", [Method, Path]),
             Headers = lists:foldl(
                         fun (F, Headers0) ->
-                                sockjs_filters:F(Req1, Headers0,
+                                sockjs_filters:F(Req, Headers0,
                                                  Server, SessionId)
                         end, [], Filters),
             case SendRecv of
                 send ->
                     sockjs_session:maybe_create(SessionId, Receive),
-                    sockjs_filters:Action(Req1, Headers, Server, SessionId);
+                    sockjs_filters:Action(Req, Headers, Server, SessionId);
                 recv ->
                     try
-                        sockjs_filters:Action(Req1, Headers, Server, SessionId,
+                        sockjs_filters:Action(Req, Headers, Server, SessionId,
                                               Receive)
                     catch throw:no_session ->
-                            H = h_sid(Req1, [], Server, SessionId),
-                            sockjs_http:reply(404, H, "", Req1)
+                            H = h_sid(Req, [], Server, SessionId),
+                            sockjs_http:reply(404, H, "", Req)
                     end
                 end;
         nomatch ->
             nomatch;
         bad_method ->
-            sockjs_http:reply(405, [], "", Req1)
+            sockjs_http:reply(405, [], "", Req)
     end.
 
 dispatch(Method, Path, Dispatcher) ->
@@ -178,12 +178,12 @@ htmlfile(Req, Headers, _Server, SessionId) ->
     verify_callback(Req, S).
 
 verify_callback(Req, Success) ->
-    {CB, Req1} = sockjs_http:callback(Req),
+    CB = sockjs_http:callback(Req),
     case CB of
         undefined ->
-            sockjs_http:reply(500, [], "\"callback\" parameter required", Req1);
+            sockjs_http:reply(500, [], "\"callback\" parameter required", Req);
         _ ->
-            Success(Req1, CB)
+            Success(Req, CB)
     end.
 
 chunking_test(Req, Headers, _Server, _SessionId) ->
@@ -221,20 +221,20 @@ options(Req, Headers, _Server, _SessionId) ->
 %% This is send but it receives - "send" from the client POV, receive
 %% from ours.
 xhr_send(Req, Headers, _Server, SessionId, Receive) ->
-    {Body, Req1} = sockjs_http:body(Req),
+    Body = sockjs_http:body(Req),
     Success = fun (Req2) -> sockjs_http:reply(204,
                                           [{"content-type", "text/plain"}] ++
                                               Headers, "", Req2) end,
-    verify_body(Req1, Body, SessionId, Receive, Success).
+    verify_body(Req, Body, SessionId, Receive, Success).
 
 jsonp_send(Req, Headers, _Server, SessionId, Receive) ->
-    {Body, Req1} = sockjs_http:body_qs(Req),
+    Body = sockjs_http:body_qs(Req),
     Success = fun (Req2) -> sockjs_http:reply(200, Headers, "ok", Req2) end,
-    verify_body(Req1, Body, SessionId, Receive, Success).
+    verify_body(Req, Body, SessionId, Receive, Success).
 
-verify_body(Req, Body, SessionId, Receive, Success)
-  when Body =:= undefined orelse Body =:= [] orelse Body =:= <<>> ->
-    sockjs_http:reply(500, [], "Payload expected.", Req);
+ verify_body(Req, Body, _SessionId, _Receive, _Success)
+   when Body =:= undefined orelse Body =:= [] orelse Body =:= <<>> ->
+     sockjs_http:reply(500, [], "Payload expected.", Req);
 
 verify_body(Req, Body, SessionId, Receive, Success) ->
     case sockjs_util:decode(Body) of

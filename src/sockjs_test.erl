@@ -4,21 +4,10 @@
 start() ->
     Port = 8080,
     application:start(sockjs),
-    {ok, HttpImpl} = application:get_env(sockjs, http_impl),
-    case HttpImpl of
-        misultin ->
-            {ok, _} = misultin:start_link([{loop,        fun misultin_loop/1},
-                                           {ws_loop,     fun misultin_ws_loop/1},
-                                           {ws_autoexit, false},
-                                           {port,        Port}]);
-        cowboy ->
-            application:start(cowboy),
-            Dispatch = [{'_', [{'_', sockjs_cowboy_handler,
-                        {fun handle/1, fun ws_handle/1}}]}],
-            cowboy:start_listener(http, 100,
-                                  cowboy_tcp_transport, [{port,     Port}],
-                                  cowboy_http_protocol, [{dispatch, Dispatch}])
-    end,
+    {ok, _} = misultin:start_link([{loop,        fun misultin_loop/1},
+				   {ws_loop,     fun misultin_ws_loop/1},
+				   {ws_autoexit, false},
+				   {port,        Port}]),
     io:format("~nRunning on port ~p~n~n", [Port]),
     test_broadcast(start),
     receive
@@ -29,36 +18,36 @@ start() ->
 
 misultin_loop(Req) ->
     try
-        handle({misultin, Req})
+        handle(Req)
     catch A:B ->
-            io:format("~s ~p ~p~n", [A, B, erlang:get_stacktrace()]),
+	    io:format("~s ~p ~p~n", [A, B, erlang:get_stacktrace()]),
             Req:respond(500, [], "500")
     end.
 
 misultin_ws_loop(Ws) ->
-    {Receive, _} = ws_handle({misultin, Ws}),
+    Receive = ws_handle(Ws),
     sockjs_http:misultin_ws_loop(Ws, Receive).
 
 %% --------------------------------------------------------------------------
 
 handle(Req) ->
-    {Path0, Req1} = sockjs_http:path(Req),
-    Path = clean_path(Path0),
-    case sockjs_filters:handle_req(
-           Req1, Path, sockjs_test:dispatcher()) of
+    Path = clean_path(sockjs_http:path(Req)),
+    case sockjs_filters:handle_req(Req, Path, sockjs_test:dispatcher()) of
         nomatch -> case Path of
-                       "config.js" -> config_js(Req1);
-                       _           -> static(Req1, Path)
+                       "config.js" -> config_js(Req);
+                       _           -> static(Req, Path)
                    end;
         Req2    -> Req2
     end.
 
 ws_handle(Req) ->
-    {Path0, Req1} = sockjs_http:path(Req),
+    Path0 = sockjs_http:path(Req),
     Path = clean_path(Path0),
-    {Receive, _, _, _} = sockjs_filters:dispatch('GET', Path,
-                                                 sockjs_test:dispatcher()),
-    {Receive, Req1}.
+    io:format("LOG-2: ~p~n",[Path]),
+    TMP = sockjs_filters:dispatch('GET', Path, sockjs_test:dispatcher()),
+    io:format("LOG-2: ~p~n",[TMP]),
+    {Receive, _, _, _} = TMP,
+    Receive.
 
 static(Req, Path) ->
     %% TODO unsafe
@@ -78,7 +67,7 @@ config_js(Req) ->
     %% TODO parse the file? Good luck, it's JS not JSON.
     sockjs_http:reply(
       200, [{"content-type", "application/javascript"}],
-      "var client_opts = {\"url\":\"http://localhost:8080\",\"disabled_transports\":[],\"sockjs_opts\":{\"devel\":true}};", Req).
+      "var client_opts = {\"url\":\"http://\"+window.location.host+\"\",\"disabled_transports\":[],\"sockjs_opts\":{\"devel\":true}};", Req).
 
 clean_path("/")         -> "index.html";
 clean_path("/" ++ Path) -> Path.
@@ -91,19 +80,23 @@ dispatcher() ->
      {amplify,   fun test_amplify/2},
      {broadcast, fun test_broadcast/2}].
 
-test_echo(Conn, {recv, Data}) -> Conn:send(Data);
-test_echo(_Conn, _)           -> ok.
+test_echo(Conn, {recv, Data}) -> io:format("F1",[]),Conn:send(Data);
+test_echo(Conn, closed) ->     Conn:close(3000, "Go away!");
+test_echo(_Conn, MSG)           -> io:format("F1-1 ~p ",[MSG]),ok.
 
 test_close(Conn, _) ->
+    io:format("F2",[]),
     Conn:close(3000, "Go away!").
 
 test_amplify(Conn, {recv, Data}) ->
+    io:format("F3",[]),
     N0 = list_to_integer(binary_to_list(Data)),
     N = if N0 > 0 andalso N0 < 19 -> N0;
            true                   -> 1
         end,
     Conn:send(list_to_binary(string:copies("x", round(math:pow(2, N)))));
 test_amplify(_Conn, _) ->
+    io:format("F3-1",[]),
     ok.
 
 
