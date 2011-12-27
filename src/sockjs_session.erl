@@ -5,9 +5,9 @@
 
 
 
--export([init/0, start_link/2, maybe_create/2, sender/1, reply/2]).
+-export([init/0, start_link/3, maybe_create/3, sender/1, reply/2]).
 
--export([send/2, close/3]).
+-export([send/2, close/3, session/1]).
 
 -export([init/1, handle_call/3, handle_info/2, terminate/2, code_change/3,
          handle_cast/2]).
@@ -19,22 +19,24 @@
                   session_timeout,
 		  closed = false,
 		  close_msg,
-		  ws_loop
+		  ws_loop,
+		  cookies,
+		  session
 		 }).
 
 init() ->
     ok.
 
-start_link(SessionId, Receive) ->
-    gen_server:start_link(?MODULE, {SessionId, Receive}, []).
+start_link(SessionId, Receive, Opts) ->
+    gen_server:start_link(?MODULE, {SessionId, Receive, Opts}, []).
 
-maybe_create(dummy, _) ->
+maybe_create(dummy, _, _) ->
     ok;
 
-maybe_create(SessionId, Loop) ->
+maybe_create(SessionId, Loop, SessionOpts) ->
     case gproc:lookup_local_name(SessionId) of
         undefined      ->
-	    {ok, SPid} = sockjs_session_sup:start_child(SessionId, Loop),
+	    {ok, SPid} = sockjs_session_sup:start_child(SessionId, Loop, SessionOpts),
 	    SPid;
         SPid -> SPid
     end.
@@ -45,7 +47,8 @@ send(Data, {?MODULE, SessionId}) ->
 close(Code, Reason, {?MODULE, SessionId}) ->
     enqueue({close, {Code, Reason}}, SessionId),
     exit(normal).
-    
+session({?MODULE, SessionId}) ->
+    gen_server:call(spid(SessionId), session).
 
 enqueue(Cmd, SessionId) ->
     gen_server:cast(spid(SessionId), {enqueue, Cmd}).
@@ -98,12 +101,12 @@ reply(Reply, Pid, State = #session{response_pid = Pid}) ->
     {reply, Reply, State}.
 
 %% --------------------------------------------------------------------------
-init({SessionId, Loop}) ->
+init({SessionId, Loop, {Session}}) ->
     gproc:add_local_name(SessionId),
     enqueue({open, nil}, SessionId),
     process_flag(trap_exit, true),
     WS_LOOP = spawn_link(fun() -> Loop({?MODULE, SessionId}) end),
-    {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP }}.
+    {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP, session=Session}}.
 
 %% For non-streaming transports we want to send a closed message every time
 %% we are asked - for streaming transports we only want to send it once.
@@ -123,8 +126,13 @@ handle_call({reply, Pid, _Once}, _From, State = #session{response_pid   = RPid, 
     end;
 handle_call(ws_loop,_From, State) ->
     {reply,State#session.ws_loop,State};
+handle_call(session,_From,State) ->
+    {reply, State#session.session,State};
+
 handle_call(Request, _From, State) ->
     {stop, {odd_request, Request}, State}.
+
+
 
 handle_cast({enqueue, Cmd}, State = #session{outbound_queue = Q, response_pid   = P}) ->
     if is_pid(P) -> P ! go;

@@ -5,7 +5,8 @@
 behaviour_info(callbacks) ->
     [
      {send, 2},
-     {close, 3}
+     {close, 3},
+     {session, 1}
     ];
 behaviour_info(_Other) ->
     undefined.

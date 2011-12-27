@@ -83,7 +83,7 @@ handler(Req,Path,Handle) ->
 		    Headers = HFun(Req,[]),
 		    case Type of
 			send ->
-			    sockjs_session:maybe_create(Session,Loop),
+			    sockjs_session:maybe_create(Session,Loop,{Req:session()}),
 			    Fun(Req,Headers,Server,Session);
 			recv ->
 			    try
@@ -384,7 +384,7 @@ hex(C) ->
 ws_loop(Ws, Loop) ->
     process_flag(trap_exit,true),
     Ws:send(["o"]),
-    Self = {?WS_MODULE, Ws},
+    Self = {?WS_MODULE, Ws,Ws:session()},
     Ws_loop = spawn_link(fun() -> Loop(Self) end),
     ws_loop0(Self,Ws_loop).
 

@@ -48,6 +48,7 @@ config_js(Req) ->
 echo_loop(Conn) ->
     receive
 	{browser,Data} ->
+	    io:format("Test: ~p~n",[Conn:session()]),
 	    Conn:send(Data),
 	    echo_loop(Conn);
 	_ ->
