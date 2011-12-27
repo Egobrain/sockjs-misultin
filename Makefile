@@ -16,7 +16,6 @@ deps:
 
 test: test-prep all
 	erl -pa ebin deps/*/ebin \
-		-s reloader \
 		-run sockjs_test \
 		-boot start_sasl		
 
