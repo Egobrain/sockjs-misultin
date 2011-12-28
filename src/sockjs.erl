@@ -235,23 +235,14 @@ eventsource(Req, Headers, _Server, SessionId) ->
 
 reply_loop(Req, SessionId, Once, Fmt) ->
     {ok, Heartbeat} = application:get_env(sockjs, heartbeat_ms),
-    case sockjs_session:reply(SessionId, Once) of
+    case sockjs_session:reply(SessionId, Once, Req) of
         wait ->
-	    Ref = erlang:send_after(Heartbeat,self(),ping),
-	    InLoop = fun(Loop) ->
-			     receive
-				 go ->
-				     erlang:cancel_timer(Ref),
-				     reply_loop(Req, SessionId, Once, Fmt);
-				 {DestPid,session} ->
-				     misultin_utility:respond(DestPid,Req:session()),
-				     Loop(Loop);
-				 ping ->
-				     chunk(Req, <<"h">>, Fmt),
-				     reply_loop0(Req, SessionId, Once, Fmt)
-			     end
-		     end,
-	    InLoop(InLoop);
+	    receive
+		go ->  reply_loop(Req, SessionId, Once, Fmt)
+	    after Heartbeat ->
+		    chunk(Req, <<"h">>, Fmt),
+		    reply_loop0(Req, SessionId, Once, Fmt)
+	    end;
         session_in_use ->
 	    Err = sockjs_util:encode_list([{close, ?STILL_OPEN}]),
 	    chunk(Req, Err, Fmt),

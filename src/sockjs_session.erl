@@ -3,9 +3,9 @@
 -behaviour(sockjs_sender).
 -behaviour(gen_server).
 
+-include("../../../src/include/log.hrl").
 
-
--export([init/0, start_link/2, maybe_create/2, sender/1, reply/2]).
+-export([init/0, start_link/2, maybe_create/2, sender/1, reply/3]).
 
 -export([send/2, close/3, session/1]).
 
@@ -34,8 +34,12 @@ maybe_create(dummy, _) ->
 maybe_create(SessionId, Loop) ->
     case gproc:lookup_local_name(SessionId) of
         undefined      ->
-	    {ok, SPid} = sockjs_session_sup:start_child(SessionId, Loop),
-	    SPid;
+	    case sockjs_session_sup:start_child(SessionId, Loop) of
+		{ok,SPid} ->
+		    SPid;
+		{error,already_present} ->
+		    maybe_create(SessionId,Loop)
+	    end;
         SPid -> SPid
     end.
 
@@ -54,8 +58,8 @@ enqueue(Cmd, SessionId) ->
 sender(SessionId) ->
     gen_server:call(spid(SessionId), ws_loop).
 
-reply(SessionId, Once) ->
-    gen_server:call(spid(SessionId), {reply, self(), Once}, infinity).
+reply(SessionId, Once, Req) ->
+    gen_server:call(spid(SessionId), {reply, self(), Once, Req}, infinity).
 
 %% --------------------------------------------------------------------------
 
@@ -87,45 +91,62 @@ maybe_close([{close, _}],       _State) ->
 maybe_close(_,                  State) ->
     State.
 
-reply(Reply, Pid, State = #session{response_pid    = undefined, session_timeout = Ref}) ->
+reply3(Reply, Pid, State = #session{response_pid    = undefined, session_timeout = Ref})  ->
     link(Pid),
     case Ref of
         undefined -> ok;
         _         -> erlang:cancel_timer(Ref)
     end,
-    reply(Reply, Pid, State#session{response_pid    = Pid,
+    reply3(Reply, Pid, State#session{response_pid    = Pid,
                                     session_timeout = undefined});
-reply(Reply, Pid, State = #session{response_pid = Pid}) ->
+reply3(Reply, Pid, State = #session{response_pid = Pid}) ->
     {reply, Reply, State}.
 
 %% --------------------------------------------------------------------------
 init({SessionId, Loop}) ->
     gproc:add_local_name(SessionId),
-    enqueue({open, nil}, SessionId),
     process_flag(trap_exit, true),
-    WS_LOOP = spawn_link(fun() -> Loop({?MODULE, SessionId}) end),
+    WS_LOOP = spawn_link(fun() ->
+				 try
+				     Loop({?MODULE, SessionId})
+				 catch
+				     throw:no_session ->
+					 exit(normal)
+				 end
+			 end),
     {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP}}.
 
 %% For non-streaming transports we want to send a closed message every time
 %% we are asked - for streaming transports we only want to send it once.
-handle_call({reply, Pid, true}, _From, State = #session{closed    = true, close_msg = Msg}) ->
-    reply(sockjs_util:encode_list(Msg), Pid, State);
-handle_call({reply, Pid, _Once}, _From, State = #session{response_pid   = RPid, outbound_queue = Q}) ->
+handle_call({reply, Pid, true,_Req}, _From, State = #session{closed    = true, close_msg = Msg}) ->
+    reply3(sockjs_util:encode_list(Msg), Pid, State);
+handle_call({reply, Pid, _Once, Req}, From, State = #session{response_pid   = RPid, outbound_queue = Q}) ->
     case {pop_from_queue(Q), RPid} of
         {{[], _}, P} when P =:= undefined orelse P =:= Pid ->
-            reply(wait, Pid, State);
+            reply3(wait, Pid, State);
         {{[], _}, _} ->
             %% don't use reply(), this shouldn't touch the session lifetime
             {reply, session_in_use, State};
         {{Popped, Rest}, _} ->
-            State1 = maybe_close(Popped, State),
-            reply(sockjs_util:encode_list(Popped), Pid,
-                  State1#session{outbound_queue = Rest})
+	    ?DBG("Popped: ~p~n",[Popped]),
+	    case Popped of
+		[{session,To}] ->
+		    ?DBG("session"),
+		    Session = Req:session(),
+		    ?DBG(Session),
+		    Res = gen_server:reply(To,Session),
+		    ?DBG(Res),
+		    handle_call({reply,Pid,_Once,Req},From, State#session{outbound_queue = Rest});
+		_ ->
+		    ?DBG("other ~p"),
+		    State1 = maybe_close(Popped, State),
+		    reply3(sockjs_util:encode_list(Popped), Pid,State1#session{outbound_queue = Rest})
+	    end
     end;
 handle_call(ws_loop,_From, State) ->
     {reply,State#session.ws_loop,State};
-handle_call(session,_From,State) ->
-    {reply, misultin_utility:call(State#session.response_pid,session,1000) , State};
+handle_call(session, From, State = #session{outbound_queue = Q}) ->
+    {noreply, State#session{outbound_queue = queue:in({session,From},Q)}};
 
 handle_call(Request, _From, State) ->
     {stop, {odd_request, Request}, State}.
