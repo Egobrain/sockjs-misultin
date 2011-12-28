@@ -45,12 +45,17 @@ config_js(Req) ->
 
 %% --------------------------------------------------------------------------
 
-echo_loop(Conn) ->
+echo_loop(Ws) ->
     receive
-	{browser,Data} ->
-	    io:format("Test: ~p~n",[Conn:session()]),
-	    Conn:send(Data),
-	    echo_loop(Conn);
+	{browser,JSON} ->
+	    case sockjs_util:decode(JSON) of
+		{ok, Data} ->
+		    io:format("session: ~p",[Ws:session()]),
+		    Ws:send(Data),
+		    echo_loop(Ws);
+		{error,_} ->
+		    Ws:close(500,"Invalid JSON")
+	    end;
 	_ ->
 	    ok
     end.
@@ -59,30 +64,41 @@ close_loop(Conn) ->
     Conn:close(3000, "Go away!").
 	    
 
-amplify_loop(Conn) ->
+amplify_loop(Ws) ->
     receive
-	{browser,Data} ->
-	    N0 = list_to_integer(binary_to_list(Data)),
-	    N = if N0 > 0 andalso N0 < 19 -> N0;
-		   true                   -> 1
-		end,
-	    Conn:send(list_to_binary(string:copies("x", round(math:pow(2, N))))),
-	    amplify_loop(Conn);
+	{browser,JSON} ->
+	    case sockjs_util:decode(JSON) of
+		{ok, Data} ->
+		    N0 = list_to_integer(binary_to_list(Data)),
+		    N = if N0 > 0 andalso N0 < 19 -> N0;
+			   true                   -> 1
+			end,
+		    Ws:send(list_to_binary(string:copies("x", round(math:pow(2, N))))),
+		    amplify_loop(Ws);
+		{error,_} ->
+		    Ws:close(500,"Invalid JSON")
+	    end;
+	
 	_ ->
 	    ok
     end.
 
 broadcast_loop(start) ->
     ets:new(broadcast_table, [public, named_table]);
-broadcast_loop(Conn) ->
-    ets:insert(broadcast_table, {Conn}),
+broadcast_loop(Ws) ->
+    ets:insert(broadcast_table, {Ws}),
     Loop = fun(Loop) ->
 		   receive
-		       {browser,Data} ->
-			   ets:foldl(fun({C}, _Acc) -> C:send(Data) end, [], broadcast_table),
-			   Loop(Loop);
+		       {browser,JSON} ->
+			   case sockjs_util:decode(JSON) of
+			       {ok, Data} ->
+				   ets:foldl(fun({C}, _Acc) -> C:send(Data) end, [], broadcast_table),
+				   Loop(Loop);
+			       {error,_} ->
+				   Ws:close(500,"Invalid JSON")
+			   end;
 		       closed ->
-			   ets:delete_object(broadcast_table, {Conn})
+			   ets:delete_object(broadcast_table, {Ws})
 		   end
 	   end,
     Loop(Loop).

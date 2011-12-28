@@ -5,7 +5,7 @@
 
 
 
--export([init/0, start_link/3, maybe_create/3, sender/1, reply/2]).
+-export([init/0, start_link/2, maybe_create/2, sender/1, reply/2]).
 
 -export([send/2, close/3, session/1]).
 
@@ -19,24 +19,22 @@
                   session_timeout,
 		  closed = false,
 		  close_msg,
-		  ws_loop,
-		  cookies,
-		  session
+		  ws_loop
 		 }).
 
 init() ->
     ok.
 
-start_link(SessionId, Receive, Opts) ->
-    gen_server:start_link(?MODULE, {SessionId, Receive, Opts}, []).
+start_link(SessionId, Receive) ->
+    gen_server:start_link(?MODULE, {SessionId, Receive}, []).
 
-maybe_create(dummy, _, _) ->
+maybe_create(dummy, _) ->
     ok;
 
-maybe_create(SessionId, Loop, SessionOpts) ->
+maybe_create(SessionId, Loop) ->
     case gproc:lookup_local_name(SessionId) of
         undefined      ->
-	    {ok, SPid} = sockjs_session_sup:start_child(SessionId, Loop, SessionOpts),
+	    {ok, SPid} = sockjs_session_sup:start_child(SessionId, Loop),
 	    SPid;
         SPid -> SPid
     end.
@@ -101,12 +99,12 @@ reply(Reply, Pid, State = #session{response_pid = Pid}) ->
     {reply, Reply, State}.
 
 %% --------------------------------------------------------------------------
-init({SessionId, Loop, {Session}}) ->
+init({SessionId, Loop}) ->
     gproc:add_local_name(SessionId),
     enqueue({open, nil}, SessionId),
     process_flag(trap_exit, true),
     WS_LOOP = spawn_link(fun() -> Loop({?MODULE, SessionId}) end),
-    {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP, session=Session}}.
+    {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP}}.
 
 %% For non-streaming transports we want to send a closed message every time
 %% we are asked - for streaming transports we only want to send it once.
@@ -127,7 +125,7 @@ handle_call({reply, Pid, _Once}, _From, State = #session{response_pid   = RPid, 
 handle_call(ws_loop,_From, State) ->
     {reply,State#session.ws_loop,State};
 handle_call(session,_From,State) ->
-    {reply, State#session.session,State};
+    {reply, misultin_utility:call(State#session.response_pid,session,1000) , State};
 
 handle_call(Request, _From, State) ->
     {stop, {odd_request, Request}, State}.

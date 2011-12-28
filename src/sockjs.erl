@@ -56,6 +56,7 @@ http_handler(HttpHandler,SockJSHandler) when is_function(HttpHandler) andalso is
     end.
 
 ws_handler(SockJSHandler) ->
+    io:format("websocket"),
     fun(Ws) ->
 	    case lists:reverse(resource([lowercase, urldecode],Ws)) of
 		["websocket",_Session,_Server | Rest] ->
@@ -83,7 +84,7 @@ handler(Req,Path,Handle) ->
 		    Headers = HFun(Req,[]),
 		    case Type of
 			send ->
-			    sockjs_session:maybe_create(Session,Loop,{Req:session()}),
+			    sockjs_session:maybe_create(Session,Loop),
 			    Fun(Req,Headers,Server,Session);
 			recv ->
 			    try
@@ -236,12 +237,21 @@ reply_loop(Req, SessionId, Once, Fmt) ->
     {ok, Heartbeat} = application:get_env(sockjs, heartbeat_ms),
     case sockjs_session:reply(SessionId, Once) of
         wait ->
-	    receive
-		go -> reply_loop(Req, SessionId, Once, Fmt)
-	    after Heartbeat ->
-		    chunk(Req, <<"h">>, Fmt),
-		    reply_loop0(Req, SessionId, Once, Fmt)
-	    end;
+	    Ref = erlang:send_after(Heartbeat,self(),ping),
+	    InLoop = fun(Loop) ->
+			     receive
+				 go ->
+				     erlang:cancel_timer(Ref),
+				     reply_loop(Req, SessionId, Once, Fmt);
+				 {DestPid,session} ->
+				     misultin_utility:respond(DestPid,Req:session()),
+				     Loop(Loop);
+				 ping ->
+				     chunk(Req, <<"h">>, Fmt),
+				     reply_loop0(Req, SessionId, Once, Fmt)
+			     end
+		     end,
+	    InLoop(InLoop);
         session_in_use ->
 	    Err = sockjs_util:encode_list([{close, ?STILL_OPEN}]),
 	    chunk(Req, Err, Fmt),
@@ -329,10 +339,13 @@ verify_body(Req, Body, SessionId, Success) ->
         {error, _} ->
             Req:respond(500, [], "Broken JSON encoding.")
     end.
+    % receive_body(Body,SessionId), 
+    % Success().
 
 receive_body(Decoded, SessionId) ->
     Sender = sockjs_session:sender(SessionId),
-    [Sender ! {browser,Msg} || Msg <- Decoded].
+    
+    [Sender ! {browser,sockjs_util:encode(Msg)} || Msg <- Decoded].
 
 % ---------------------------------------------------------------------------
 
@@ -384,31 +397,8 @@ hex(C) ->
 ws_loop(Ws, Loop) ->
     process_flag(trap_exit,true),
     Ws:send(["o"]),
-    Self = {?WS_MODULE, Ws,Ws:session()},
-    Ws_loop = spawn_link(fun() -> Loop(Self) end),
-    ws_loop0(Self,Ws_loop).
+    Loop({?WS_MODULE, Ws}).
 
-ws_loop0(Self,Ws_loop) ->
-    receive
-        {browser, ""} ->
-            ws_loop0(Self, Ws_loop);
-        {browser, Data} ->
-            case sockjs_util:decode(Data) of
-                {ok, Decoded} ->
-                    Ws_loop ! {browser, Decoded},
-                    ws_loop0(Self, Ws_loop);
-                {error, _} ->
-		    Self:close(500,"Broken JSON encoding.'"),
-                    closed
-            end;
-        closed ->
-            Ws_loop ! closed;
-	{'EXIT',_,_,_} ->
-	    closed;
-        Msg ->
-	    Ws_loop ! Msg,
-            ws_loop0(Self, Ws_loop)
-    end.
 
 resource(Options, ReqT) when is_list(Options) ->
     RawUri = ReqT:get(path),
