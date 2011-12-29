@@ -5,6 +5,8 @@
 
 -define(STILL_OPEN, {2010, "Another connection still open"}).
 
+-include("../../../src/include/log.hrl").
+
 -define(IFRAME, "<!DOCTYPE html>
 <html>
 <head>
@@ -237,17 +239,23 @@ reply_loop(Req, SessionId, Once, Fmt) ->
     {ok, Heartbeat} = application:get_env(sockjs, heartbeat_ms),
     case sockjs_session:reply(SessionId, Once, Req) of
         wait ->
+	    ?DBG("wait"),
 	    receive
-		go ->  reply_loop(Req, SessionId, Once, Fmt)
+		go ->
+		    ?DBG("go"),
+		    reply_loop(Req, SessionId, Once, Fmt)
 	    after Heartbeat ->
+		    ?DBG("heart"),
 		    chunk(Req, <<"h">>, Fmt),
 		    reply_loop0(Req, SessionId, Once, Fmt)
 	    end;
         session_in_use ->
+	    ?DBG("in use"),
 	    Err = sockjs_util:encode_list([{close, ?STILL_OPEN}]),
 	    chunk(Req, Err, Fmt),
 	    Req:chunk(done);
         Reply ->
+	    ?DBG(Reply),
 	    chunk(Req, Reply, Fmt),
 	    reply_loop0(Req, SessionId, Once, Fmt)
     end.

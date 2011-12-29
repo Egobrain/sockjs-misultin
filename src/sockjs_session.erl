@@ -32,15 +32,15 @@ maybe_create(dummy, _) ->
     ok;
 
 maybe_create(SessionId, Loop) ->
-    case gproc:lookup_local_name(SessionId) of
-        undefined      ->
-	    case sockjs_session_sup:start_child(SessionId, Loop) of
-		{ok,SPid} ->
-		    SPid;
-		{error,already_present} ->
-		    maybe_create(SessionId,Loop)
-	    end;
-        SPid -> SPid
+    % TODO fix bugs
+    case sockjs_session_sup:start_child(SessionId, Loop) of
+	{error,{already_started,SPid}} ->
+	    SPid;
+	{error,already_present} ->
+	    gproc:lookup_local_name(SessionId);
+	{ok,SPid} ->
+	    enqueue({open, nil}, SessionId),
+	    SPid
     end.
 
 send(Data, {?MODULE, SessionId}) ->
@@ -107,20 +107,22 @@ init({SessionId, Loop}) ->
     gproc:add_local_name(SessionId),
     process_flag(trap_exit, true),
     WS_LOOP = spawn_link(fun() ->
-				 try
+%				 try
 				     Loop({?MODULE, SessionId})
-				 catch
-				     throw:no_session ->
-					 exit(normal)
-				 end
+%				 catch
+%				     throw:no_session ->
+%					 exit(normal)
+%				 end
 			 end),
     {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP}}.
 
 %% For non-streaming transports we want to send a closed message every time
 %% we are asked - for streaming transports we only want to send it once.
 handle_call({reply, Pid, true,_Req}, _From, State = #session{closed    = true, close_msg = Msg}) ->
+    ?DBG(Msg),
     reply3(sockjs_util:encode_list(Msg), Pid, State);
 handle_call({reply, Pid, _Once, Req}, From, State = #session{response_pid   = RPid, outbound_queue = Q}) ->
+    ?DBG(pop_from_queue(Q)),
     case {pop_from_queue(Q), RPid} of
         {{[], _}, P} when P =:= undefined orelse P =:= Pid ->
             reply3(wait, Pid, State);

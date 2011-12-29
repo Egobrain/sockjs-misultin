@@ -50,7 +50,7 @@ echo_loop(Ws) ->
 	{browser,JSON} ->
 	    case sockjs_util:decode(JSON) of
 		{ok, Data} ->
-		    io:format("session: ~p",[Ws:session()]),
+		    % io:format("session: ~p",[Ws:session()]),
 		    Ws:send(Data),
 		    echo_loop(Ws);
 		{error,_} ->
