@@ -3,9 +3,7 @@
 -behaviour(sockjs_sender).
 -behaviour(gen_server).
 
--include("../../../src/include/log.hrl").
-
--export([init/0, start_link/2, maybe_create/2, sender/1, reply/3]).
+-export([start_link/2, maybe_create/2, sender/1, reply/3]).
 
 -export([send/2, close/3, session/1]).
 
@@ -13,7 +11,7 @@
          handle_cast/2]).
 
 -record(session, {id,
-		  outbound_queue = queue:new(),
+		  outbound_queue,
 		  response_pid,
 		  receiver,
                   session_timeout,
@@ -21,9 +19,6 @@
 		  close_msg,
 		  ws_loop
 		 }).
-
-init() ->
-    ok.
 
 start_link(SessionId, Receive) ->
     gen_server:start_link(?MODULE, {SessionId, Receive}, []).
@@ -39,7 +34,6 @@ maybe_create(SessionId, Loop) ->
 	{error,already_present} ->
 	    gproc:lookup_local_name(SessionId);
 	{ok,SPid} ->
-	    enqueue({open, nil}, SessionId),
 	    SPid
     end.
 
@@ -63,9 +57,7 @@ reply(SessionId, Once, Req) ->
 
 %% --------------------------------------------------------------------------
 
-
 pop_from_queue(Q) ->
-
     {PoppedRev, Rest} = pop_from_queue(any, [], Q),
     {lists:reverse(PoppedRev), Rest}.
 
@@ -79,7 +71,7 @@ pop_from_queue(TypeAcc, Acc, Q) ->
 
 spid(SessionId) ->
     case gproc:lookup_local_name(SessionId) of
-        undefined          ->
+        undefined ->
 	    throw(no_session);
         SPid -> SPid
     end.
@@ -107,22 +99,20 @@ init({SessionId, Loop}) ->
     gproc:add_local_name(SessionId),
     process_flag(trap_exit, true),
     WS_LOOP = spawn_link(fun() ->
-%				 try
+				 try
 				     Loop({?MODULE, SessionId})
-%				 catch
-%				     throw:no_session ->
-%					 exit(normal)
-%				 end
+				 catch
+				     throw:no_session ->
+					 exit(no_session)
+				 end
 			 end),
-    {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP}}.
+    {ok, #session{id = SessionId, receiver = Loop, ws_loop = WS_LOOP, outbound_queue=queue:in({open,nil},queue:new())}}.
 
 %% For non-streaming transports we want to send a closed message every time
 %% we are asked - for streaming transports we only want to send it once.
 handle_call({reply, Pid, true,_Req}, _From, State = #session{closed    = true, close_msg = Msg}) ->
-    ?DBG(Msg),
     reply3(sockjs_util:encode_list(Msg), Pid, State);
 handle_call({reply, Pid, _Once, Req}, From, State = #session{response_pid   = RPid, outbound_queue = Q}) ->
-    ?DBG(pop_from_queue(Q)),
     case {pop_from_queue(Q), RPid} of
         {{[], _}, P} when P =:= undefined orelse P =:= Pid ->
             reply3(wait, Pid, State);
@@ -130,17 +120,11 @@ handle_call({reply, Pid, _Once, Req}, From, State = #session{response_pid   = RP
             %% don't use reply(), this shouldn't touch the session lifetime
             {reply, session_in_use, State};
         {{Popped, Rest}, _} ->
-	    ?DBG("Popped: ~p~n",[Popped]),
 	    case Popped of
 		[{session,To}] ->
-		    ?DBG("session"),
-		    Session = Req:session(),
-		    ?DBG(Session),
-		    Res = gen_server:reply(To,Session),
-		    ?DBG(Res),
+		    gen_server:reply(To,Req:session()),
 		    handle_call({reply,Pid,_Once,Req},From, State#session{outbound_queue = Rest});
 		_ ->
-		    ?DBG("other ~p"),
 		    State1 = maybe_close(Popped, State),
 		    reply3(sockjs_util:encode_list(Popped), Pid,State1#session{outbound_queue = Rest})
 	    end
