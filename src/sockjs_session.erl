@@ -127,7 +127,7 @@ handle_call({reply, Pid, _Once}, _From, State = #session{response_pid   = RPid, 
 handle_call(ws_loop,_From, State) ->
     {reply,State#session.ws_loop,State};
 handle_call(session,_From,State) ->
-    {reply, State#session.session,State};
+    {reply, misultin_utility:call(State#session.response_pid,session,3000),State};
 
 handle_call(Request, _From, State) ->
     {stop, {odd_request, Request}, State}.
